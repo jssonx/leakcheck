@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include "mld.h"
 #include "css.h"
 #include <assert.h>
 #include <memory.h>
 
-char *DATA_TYPE[] = {"UINT8", "UINT32", "INT32", "CHAR", "OBJ_PTR", "FLOAT", "DOUBLE", "OBJ_STRUCT"};
+char *DATA_TYPE[] = {"UINT8", "UINT32", "INT32", "CHAR", "OBJ_PTR", "VOID_PTR", "FLOAT", "DOUBLE", "OBJ_STRUCT"};
 
 /* Dumping Function */
 
@@ -76,7 +75,7 @@ static struct_db_rec_t *struct_db_look_up(struct_db_t *struct_db, char *struct_n
 
     for (; head; head = head->next)
     {
-        if (strncmp(head->struct_name, struct_name, (size_t)MAX_STRUCTURE_NAME_SIZE) == 0)
+        if (strncmp(head->struct_name, struct_name, MAX_STRUCTURE_NAME_SIZE) == 0)
             return head;
     }
     return NULL;
@@ -139,6 +138,54 @@ void *xcalloc(object_db_t *object_db, char *struct_name, int units)
     return ptr;
 }
 
+static void delete_object_record_from_object_db(object_db_t *object_db, object_db_rec_t *object_rec)
+{
+
+    assert(object_rec);
+
+    object_db_rec_t *head = object_db->head;
+    if (head == object_rec)
+    {
+        object_db->head = object_rec->next;
+        free(object_rec);
+        return;
+    }
+
+    object_db_rec_t *prev = head;
+    head = head->next;
+
+    while (head)
+    {
+        if (head != object_rec)
+        {
+            prev = head;
+            head = head->next;
+            continue;
+        }
+
+        prev->next = head->next;
+        head->next = NULL;
+        free(head);
+        return;
+    }
+}
+
+void xfree(object_db_t *object_db, void *ptr)
+{
+
+    if (!ptr)
+        return;
+    object_db_rec_t *object_rec =
+        object_db_look_up(object_db, ptr);
+
+    assert(object_rec);
+    assert(object_rec->ptr);
+    free(object_rec->ptr);
+    object_rec->ptr = NULL;
+    /*Delete object record from object db*/
+    delete_object_record_from_object_db(object_db, object_rec);
+}
+
 /*Dumping Functions for Object database*/
 void print_object_rec(object_db_rec_t *obj_rec, int i)
 {
@@ -176,8 +223,7 @@ void mld_register_global_object_as_root(object_db_t *object_db, void *objptr, ch
 
 /* Application might create an object using xcalloc , but at the same time the object
  * can be root object. Use this API to override the object flags for the object already
- * preent in object db
- */
+ * preent in object db*/
 void mld_set_dynamic_object_as_root(object_db_t *object_db, void *obj_ptr)
 {
 
@@ -228,6 +274,11 @@ static void mld_explore_objects_recursively(object_db_t *object_db, object_db_re
     // Parent object must have already visited
     assert(parent_obj_rec->is_visited);
 
+    if (parent_struct_rec->n_fields == 0)
+    {
+        return;
+    }
+
     for (i = 0; i < parent_obj_rec->units; i++)
     {
 
@@ -249,6 +300,7 @@ static void mld_explore_objects_recursively(object_db_t *object_db, object_db_re
             case DOUBLE:
             case OBJ_STRUCT:
                 break;
+            case VOID_PTR:
             case OBJ_PTR:
             default:;
 
@@ -272,7 +324,8 @@ static void mld_explore_objects_recursively(object_db_t *object_db, object_db_re
                 if (!child_object_rec->is_visited)
                 {
                     child_object_rec->is_visited = MLD_TRUE;
-                    mld_explore_objects_recursively(object_db, child_object_rec);
+                    if (field_info->dtype != VOID_PTR) /*Explore next object only when it is not a VOID_PTR*/
+                        mld_explore_objects_recursively(object_db, child_object_rec);
                 }
                 else
                 {
@@ -285,7 +338,6 @@ static void mld_explore_objects_recursively(object_db_t *object_db, object_db_re
 
 /* Level 1 Pseudocode : We will traverse the graph starting from root objects
  * and mark all reachable nodes as visited*/
-
 void run_mld_algorithm(object_db_t *object_db)
 {
 
@@ -385,4 +437,13 @@ void report_leaked_objects(object_db_t *object_db)
             printf("\n\n");
         }
     }
+}
+
+/*Support for primitive data types*/
+void mld_init_primitive_data_types_support(struct_db_t *struct_db)
+{
+
+    REG_STRUCT(struct_db, int, 0);
+    REG_STRUCT(struct_db, float, 0);
+    REG_STRUCT(struct_db, double, 0);
 }
